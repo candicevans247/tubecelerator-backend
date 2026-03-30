@@ -80,14 +80,6 @@ if (!duration || typeof duration !== 'number') {
     return res.status(400).json({ error: 'Invalid media_mode. Choose auto or manual.' });
   }
   
-  // ✅ NEW: Block maintenance modes
-  if (actualMediaType === 'videos' || actualMediaType === 'mixed') {
-    return res.status(503).json({ 
-      error: 'UNDER MAINTENANCE, CHECK BACK LATER',
-      message: 'Videos Only and Mixed modes are currently under maintenance. Please use Images Only.'
-    });
-  }
-  
   // ✅ NEW: Validate caption fields
   if (add_captions === true) {
     const validStyles = ['Karaoke', 'Banger', 'Acid', 'Lovly', 'Marvel', 'Marker',
