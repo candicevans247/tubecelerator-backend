@@ -1,12 +1,16 @@
-// backend/server.js - ADD content_flow support
+// backend/server.js
 const express = require('express');
 const bodyParser = require('body-parser');
 const { Pool } = require('pg');
+const axios = require('axios');
 const app = express();
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
+
+// ✅ ADD: Worker webhook URL
+const WORKER_BASE_URL = process.env.WORKER_BASE_URL || 'http://localhost:4000';
 
 const validVoices = [
   'Max', 'Ashley', 'Ava', 'Roger', 'Lora',
@@ -19,13 +23,31 @@ const validVoices = [
 ];
 
 const APPROVAL_REQUIRED_USER = 6646033752;
-
-// ✅ NEW: Valid content flows
 const validContentFlows = ['news', 'listicle'];
 
 app.use(bodyParser.json());
 
-// UPDATED: job creation endpoint with content_flow
+// ✅ NEW: Helper function to wake worker
+async function wakeWorker(jobId, action = 'new_job') {
+  try {
+    console.log(`🔔 Waking worker for job ${jobId} (${action})`);
+    
+    await axios.post(`${WORKER_BASE_URL}/wake-up`, {
+      jobId,
+      action,
+      timestamp: Date.now()
+    }, {
+      timeout: 5000 // Don't wait too long
+    });
+    
+    console.log(`✅ Worker notified for job ${jobId}`);
+  } catch (error) {
+    // Don't fail the request if worker is down
+    console.warn(`⚠️ Could not wake worker: ${error.message}`);
+    console.warn(`   Job ${jobId} will be processed when worker restarts`);
+  }
+}
+
 app.post('/generate-video', async (req, res) => {
   let { 
     user_id, userId, script, prompt, duration, videotype, voice, 
@@ -38,20 +60,18 @@ app.post('/generate-video', async (req, res) => {
   const actualMediaType = media_type || 'images';
   const actualMediaMode = media_mode || 'auto';  
 
-  // Existing validation...
+  // Validation (keep all your existing validation)
   if (!actualUserId) {
     return res.status(400).json({ error: 'Missing user_id (Telegram ID).' });
   }
   if (!script && !prompt) {
     return res.status(400).json({ error: 'Provide either a script or a prompt.' });
   }
- // ✅ NEW: Accept any duration between 1-30 minutes
-if (!duration || typeof duration !== 'number') {
+  if (!duration || typeof duration !== 'number') {
     return res.status(400).json({ 
       error: 'Duration is required and must be a number.' 
     });
   }
-  
   if (duration < 1 || duration > 30) {
     return res.status(400).json({ 
       error: 'Duration must be between 1 and 30 minutes.' 
@@ -63,11 +83,10 @@ if (!duration || typeof duration !== 'number') {
   if (!voice || !validVoices.includes(voice)) {
     return res.status(400).json({ error: `Invalid voice. Choose from: ${validVoices.join(', ')}` });
   }
-    if (!validContentFlows.includes(actualContentFlow)) {
+  if (!validContentFlows.includes(actualContentFlow)) {
     return res.status(400).json({ error: `Invalid content_flow. Choose from: ${validContentFlows.join(', ')}` });
   }
   
-  // ✅ NEW: Validate media_type (simplified)
   const validMediaTypes = ['images', 'videos', 'mixed'];
   if (!validMediaTypes.includes(actualMediaType)) {
     return res.status(400).json({ 
@@ -75,18 +94,16 @@ if (!duration || typeof duration !== 'number') {
     });
   }
   
-  // ✅ NEW: Validate media_mode
   if (!['auto', 'manual'].includes(actualMediaMode)) {
     return res.status(400).json({ error: 'Invalid media_mode. Choose auto or manual.' });
   }
   
-  // ✅ NEW: Validate caption fields
   if (add_captions === true) {
     const validStyles = ['Karaoke', 'Banger', 'Acid', 'Lovly', 'Marvel', 'Marker',
-  'Neon Pulse', 'Beasty', 'Crazy', 'Safari', 'Popline', 'Desert',
-  'Hook', 'Sky', 'Flamingo', 'Deep Diver B&W', 'New', 'Catchy',
-  'From', 'Classic', 'Classic Big', 'Old Money', 'Cinema',
-  'Midnight Serif', 'Aurora Ink'];
+      'Neon Pulse', 'Beasty', 'Crazy', 'Safari', 'Popline', 'Desert',
+      'Hook', 'Sky', 'Flamingo', 'Deep Diver B&W', 'New', 'Catchy',
+      'From', 'Classic', 'Classic Big', 'Old Money', 'Cinema',
+      'Midnight Serif', 'Aurora Ink'];
     if (!caption_style || !validStyles.includes(caption_style)) {
       return res.status(400).json({ 
         error: 'Invalid caption_style. Must be one of: ' + validStyles.join(', ') 
@@ -97,10 +114,10 @@ if (!duration || typeof duration !== 'number') {
   try {
     const initialStatus = actualUserId === APPROVAL_REQUIRED_USER ? 'pending_approval' : 'pending';
     
-        const result = await pool.query(
+    const result = await pool.query(
       `INSERT INTO jobs (
         user_id, prompt, script, duration, videotype, voice, 
-        content_flow, media_type, media_mode,  -- ✅ CHANGED
+        content_flow, media_type, media_mode,
         add_captions, caption_style,
         status
       )
@@ -114,8 +131,8 @@ if (!duration || typeof duration !== 'number') {
         videotype, 
         voice,
         actualContentFlow, 
-        actualMediaType,      // ✅ CHANGED position
-        actualMediaMode,      // ✅ NEW
+        actualMediaType,
+        actualMediaMode,
         add_captions || false,      
         caption_style || null,      
         initialStatus
@@ -123,9 +140,15 @@ if (!duration || typeof duration !== 'number') {
     );
     
     const jobId = result.rows[0].id;
-    console.log(`> [backend] Job ${jobId} created (captions: ${add_captions ? caption_style : 'disabled'})`);
+    console.log(`✅ [backend] Job ${jobId} created (status: ${initialStatus})`);
     
-       res.json({
+    // ✅ WAKE WORKER IMMEDIATELY (non-blocking)
+    // Don't await - respond to user immediately
+    wakeWorker(jobId, 'job_created').catch(err => {
+      console.error(`Failed to wake worker: ${err.message}`);
+    });
+    
+    res.json({
       success: true,
       message: 'Celebrity video generation job created.',
       jobId,
@@ -152,5 +175,6 @@ app.get('/health', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Backend server running on port ${PORT}`);
+  console.log(`✅ Backend server running on port ${PORT}`);
+  console.log(`🔗 Worker webhook URL: ${WORKER_BASE_URL}`);
 });
