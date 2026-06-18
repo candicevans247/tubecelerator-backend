@@ -13,19 +13,13 @@ const pool = new Pool({
 const WORKER_BASE_URL = process.env.WORKER_BASE_URL || 'http://localhost:4000';
 
 const validVoices = [
+  'Max', 'Ashley', 'Ava', 'Roger', 'Lora',
+  'Cassie', 'Ryan', 'Rachel', 'Missy', 'Amy',
+  'Patrick', 'Andre', 'Stan', 'Lance', 'Alice',
   'Liz', 'Dave', 'Candice', 'Autumn', 'Desmond', 'Charlotte',
   'Ace', 'Liam', 'Keisha', 'Kent', 'Daisy', 'Lucy',
   'Linda', 'Jamal', 'Sydney', 'Sally', 'Violet', 'Rhihanon',
-  'Mark', 'Cherry', 'Serena', 'Maia', 'Vivian', 'Bella',
-  'Mia', 'Seren', 'Stella', 'Chelsie', 'Momo',
-  'Bellona', 'Bunny', 'Elias', 'Nini',
-  'Ethan', 'Moon', 'Kai', 'EldricSage', 'Mochi',
-  'Vincent', 'Neil', 'Arthur', 'Pip', 'Nofish',
-  'Jennifer', 'Katerina', 'Sonrisa', 'Sohee', 'OnoAnna',
-  'QwenRyan', 'Aiden', 'Bodega', 'Alek', 'Dolce',
-  'Lenn', 'Emilien', 'QwenAndre', 'RadioGol',
-  'Dylan', 'Eric', 'Jada', 'Li', 'Marcus',
-  'Roy', 'Peter', 'Sunny', 'Rocky', 'Kiki'
+  'Mark'
 ];
 
 const APPROVAL_REQUIRED_USER = 6646033752;
@@ -58,7 +52,7 @@ app.post('/generate-video', async (req, res) => {
   let { 
     user_id, userId, script, prompt, duration, videotype, voice, 
     content_flow, media_type, media_mode,  
-    add_captions, caption_style, qwen_style_instruction
+    add_captions, caption_style
   } = req.body;
   
   const actualUserId = user_id || userId;
@@ -115,17 +109,6 @@ app.post('/generate-video', async (req, res) => {
         error: 'Invalid caption_style. Must be one of: ' + validStyles.join(', ') 
       });
     }
-     if (qwen_style_instruction && typeof qwen_style_instruction !== 'string') {
-    return res.status(400).json({
-      error: 'qwen_style_instruction must be a string.'
-    });
-  }
-
-  if (qwen_style_instruction && qwen_style_instruction.length > 200) {
-    return res.status(400).json({
-      error: 'qwen_style_instruction must be 200 characters or fewer.'
-    });
-  }
   }
   
   try {
@@ -135,7 +118,7 @@ app.post('/generate-video', async (req, res) => {
       `INSERT INTO jobs (
         user_id, prompt, script, duration, videotype, voice, 
         content_flow, media_type, media_mode,
-        add_captions, caption_style, qwen_style_instruction,
+        add_captions, caption_style,
         status
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
@@ -151,8 +134,7 @@ app.post('/generate-video', async (req, res) => {
         actualMediaType,
         actualMediaMode,
         add_captions || false,      
-        caption_style || null,
-        qwen_style_instruction || null,
+        caption_style || null,      
         initialStatus
       ]
     );
