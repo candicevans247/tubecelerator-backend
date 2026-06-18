@@ -65,25 +65,44 @@ const validCaptionStyles = [
 app.use(bodyParser.json());
 
 // ─────────────────────────────────────────────
-// ✅ Helper: Wake Worker (non-blocking)
+// ✅ FIXED: Wake Worker (non-blocking but with better logging)
 // ─────────────────────────────────────────────
 async function wakeWorker(jobId, action = 'new_job') {
-  try {
-    console.log(`🔔 Waking worker for job ${jobId} (${action})`);
-    
-    await axios.post(`${WORKER_BASE_URL}/wake-up`, {
-      jobId,
-      action,
-      timestamp: Date.now()
-    }, {
-      timeout: 5000
-    });
-    
-    console.log(`✅ Worker notified for job ${jobId}`);
-  } catch (error) {
-    console.warn(`⚠️ Could not wake worker: ${error.message}`);
-    console.warn(`   Job ${jobId} will be processed when worker restarts`);
-  }
+  const wakeUrl = `${WORKER_BASE_URL}/wake-up`;
+  
+  console.log(`🔔 [WAKE] Attempting to wake worker at ${wakeUrl}`);
+  console.log(`🔔 [WAKE] Job ID: ${jobId}, Action: ${action}`);
+  
+  // Use setImmediate to truly make this non-blocking
+  setImmediate(async () => {
+    try {
+      const response = await axios.post(wakeUrl, {
+        jobId,
+        action,
+        timestamp: Date.now()
+      }, {
+        timeout: 5000,
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+      console.log(`✅ [WAKE] Worker responded: ${response.status} ${response.statusText}`);
+      console.log(`✅ [WAKE] Response body:`, response.data);
+      
+    } catch (error) {
+      if (error.code === 'ECONNREFUSED') {
+        console.error(`❌ [WAKE] Worker is DOWN at ${wakeUrl}`);
+        console.error(`❌ [WAKE] Connection refused - check if worker service is running`);
+      } else if (error.code === 'ETIMEDOUT') {
+        console.error(`❌ [WAKE] Worker timeout at ${wakeUrl}`);
+      } else if (error.response) {
+        console.error(`❌ [WAKE] Worker error response: ${error.response.status}`);
+        console.error(`❌ [WAKE] Error body:`, error.response.data);
+      } else {
+        console.error(`❌ [WAKE] Unexpected error:`, error.message);
+      }
+      console.warn(`⚠️  [WAKE] Job ${jobId} will be processed when worker polls next`);
+    }
+  });
 }
 
 // ─────────────────────────────────────────────
@@ -103,7 +122,7 @@ app.post('/generate-video', async (req, res) => {
     media_mode,  
     add_captions, 
     caption_style,
-    qwen_style_instruction  // ✅ NEW: Optional Qwen style instruction
+    qwen_style_instruction
   } = req.body;
   
   const actualUserId = user_id || userId;
@@ -163,7 +182,6 @@ app.post('/generate-video', async (req, res) => {
     });
   }
   
-  // ✅ NEW: Validate Qwen style instruction if present
   if (qwen_style_instruction && typeof qwen_style_instruction !== 'string') {
     return res.status(400).json({
       error: 'qwen_style_instruction must be a string.'
@@ -176,7 +194,6 @@ app.post('/generate-video', async (req, res) => {
     });
   }
   
-  // ✅ Validate caption style if captions enabled
   if (add_captions === true) {
     if (!caption_style || !validCaptionStyles.includes(caption_style)) {
       return res.status(400).json({ 
@@ -214,19 +231,19 @@ app.post('/generate-video', async (req, res) => {
         actualMediaMode,
         add_captions || false,      
         caption_style || null,
-        qwen_style_instruction || null,  // ✅ NEW: Store Qwen instruction
+        qwen_style_instruction || null,
         initialStatus
       ]
     );
     
     const jobId = result.rows[0].id;
-    console.log(`✅ [backend] Job ${jobId} created for user ${actualUserId}`);
+    console.log(`✅ [BACKEND] Job ${jobId} created for user ${actualUserId}`);
     console.log(`   Voice: ${voice} | Flow: ${actualContentFlow} | Status: ${initialStatus}`);
     if (qwen_style_instruction) {
       console.log(`   Qwen style: "${qwen_style_instruction}"`);
     }
     
-    // ✅ Respond to user immediately
+    // ✅ FIRST: Respond to user immediately
     res.json({
       success: true,
       message: 'Celebrity video generation job created.',
@@ -241,13 +258,12 @@ app.post('/generate-video', async (req, res) => {
       qwen_style_instruction: qwen_style_instruction || null
     });
     
-    // ✅ Wake worker after responding (non-blocking)
-    wakeWorker(jobId, 'job_created').catch(err => {
-      console.error(`Failed to wake worker: ${err.message}`);
-    });
+    // ✅ THEN: Wake worker (truly non-blocking)
+    console.log(`🔔 [BACKEND] Triggering worker wake-up for job ${jobId}...`);
+    wakeWorker(jobId, 'job_created');
     
   } catch (error) {
-    console.error('> [backend] Error creating job:', error);
+    console.error('❌ [BACKEND] Error creating job:', error);
     res.status(500).json({ 
       success: false,
       error: 'Failed to create job.' 
@@ -262,6 +278,7 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy', 
     service: 'celebrity-backend',
+    worker_url: WORKER_BASE_URL,
     voices: {
       total: validVoices.length,
       elevenlabs: 15,
@@ -279,4 +296,16 @@ app.listen(PORT, () => {
   console.log(`✅ Celebrity Backend running on port ${PORT}`);
   console.log(`🔗 Worker webhook URL: ${WORKER_BASE_URL}`);
   console.log(`🎤 ${validVoices.length} voices available (incl. Qwen TTS)`);
+  
+  // ✅ Test worker connection on startup
+  console.log(`🔍 Testing worker connection...`);
+  axios.get(`${WORKER_BASE_URL}/health`, { timeout: 3000 })
+    .then(response => {
+      console.log(`✅ Worker is reachable: ${response.data.status}`);
+    })
+    .catch(err => {
+      console.error(`❌ Worker unreachable at ${WORKER_BASE_URL}`);
+      console.error(`   Error: ${err.message}`);
+      console.error(`   Jobs will queue until worker is available`);
+    });
 });
