@@ -1,9 +1,9 @@
 // backend/server.js
-const express = require('express');
+const express    = require('express');
 const bodyParser = require('body-parser');
-const { Pool } = require('pg');
-const axios = require('axios');
-const app = express();
+const { Pool }   = require('pg');
+const axios      = require('axios');
+const app        = express();
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -16,38 +16,18 @@ const WORKER_BASE_URL = process.env.WORKER_BASE_URL || 'http://localhost:4000';
 // voiceMap keys in audio-robot.js
 // ─────────────────────────────────────────────
 const validVoices = [
-  // Google Chirp 3 HD
-  'Liz', 'Dave', 'Candice', 'Autumn', 'Desmond',
-  'Charlotte', 'Ace', 'Liam', 'Keisha', 'Kent',
-  'Daisy', 'Lucy', 'Linda', 'Jamal', 'Sydney',
-  'Sally', 'Violet', 'Rhihanon', 'Mark',
-
-  // Qwen — Instruct-compatible female
-  'Cherry', 'Serena', 'Maia', 'Vivian', 'Bella',
-  'Mia', 'Seren', 'Stella', 'Chelsie', 'Momo',
-  'Bellona', 'Bunny', 'Elias', 'Nini',
-
-  // Qwen — Instruct-compatible male
-  'Ethan', 'Moon', 'Kai', 'EldricSage', 'Mochi',
-  'Vincent', 'Neil', 'Arthur', 'Pip', 'Nofish',
-
-  // Qwen — Flash-only female
-  'Jennifer', 'Katerina', 'Sonrisa', 'Sohee', 'OnoAnna',
-
-  // Qwen — Flash-only male
-  'QwenRyan', 'Aiden', 'Bodega', 'Alek', 'Dolce',
-  'Lenn', 'Emilien', 'QwenAndre', 'RadioGol',
-
-  // Qwen — Dialect
-  'Dylan', 'Eric', 'Jada', 'Li', 'Marcus',
-  'Roy', 'Peter', 'Sunny', 'Rocky', 'Kiki',
+  // Female
+  'Luna', 'Aria', 'Zoe', 'Calla', 'Erin',
+  'Kore', 'Lucy', 'Leda', 'Sally', 'Violet',
+  // Male
+  'Rex', 'Dave', 'Marcus', 'Desmond', 'Puck', 'Finn',
 ];
 
 const APPROVAL_REQUIRED_USER = 6646033752;
-const validContentFlows = ['news', 'listicle'];
-const validMediaTypes = ['images', 'videos', 'mixed'];
-const validMediaModes = ['auto', 'manual'];
-const validVideoTypes = ['reels', 'shorts', 'longform'];
+const validContentFlows      = ['news', 'listicle'];
+const validMediaTypes        = ['images', 'videos', 'mixed'];
+const validMediaModes        = ['auto', 'manual'];
+const validVideoTypes        = ['reels', 'shorts', 'longform'];
 
 const validCaptionStyles = [
   'Karaoke', 'Banger', 'Acid', 'Lovly', 'Marvel', 'Marker',
@@ -66,18 +46,17 @@ app.use(bodyParser.json());
 async function wakeWorker(jobId, action = 'new_job') {
   try {
     console.log(`🔔 Waking worker for job ${jobId} (${action})`);
-    
+
     await axios.post(`${WORKER_BASE_URL}/wake-up`, {
       jobId,
       action,
       timestamp: Date.now()
     }, {
-      timeout: 5000 // Don't wait too long
+      timeout: 5000
     });
-    
+
     console.log(`✅ Worker notified for job ${jobId}`);
   } catch (error) {
-    // Don't fail the request if worker is down
     console.warn(`⚠️ Could not wake worker: ${error.message}`);
     console.warn(`   Job ${jobId} will be processed when worker restarts`);
   }
@@ -94,13 +73,13 @@ app.post('/generate-video', async (req, res) => {
     duration, videotype, voice,
     content_flow, media_type, media_mode,
     add_captions, caption_style,
-    qwen_style_instruction,           // ← NEW
+    style_instruction,   // ← renamed from qwen_style_instruction
   } = req.body;
 
-  const actualUserId       = user_id || userId;
-  const actualContentFlow  = content_flow || 'news';
-  const actualMediaType    = media_type   || 'images';
-  const actualMediaMode    = media_mode   || 'auto';
+  const actualUserId      = user_id || userId;
+  const actualContentFlow = content_flow || 'news';
+  const actualMediaType   = media_type   || 'images';
+  const actualMediaMode   = media_mode   || 'auto';
 
   // ─── Validation ───────────────────────────────────────────────────
 
@@ -158,19 +137,19 @@ app.post('/generate-video', async (req, res) => {
     }
   }
 
-  // ─── qwen_style_instruction validation ────────────────────────────
-  // Optional — only used when a Qwen voice is selected.
-  // audio-robot.js will silently ignore it for non-Qwen voices.
+  // ─── style_instruction validation ────────────────────────────────
+  // Optional — works for all Gemini TTS voices.
+  // Passed as the `prompt` field to the Cloud TTS API.
 
-  if (qwen_style_instruction !== undefined && qwen_style_instruction !== null) {
-    if (typeof qwen_style_instruction !== 'string') {
+  if (style_instruction !== undefined && style_instruction !== null) {
+    if (typeof style_instruction !== 'string') {
       return res.status(400).json({
-        error: 'qwen_style_instruction must be a string.'
+        error: 'style_instruction must be a string.'
       });
     }
-    if (qwen_style_instruction.length > 200) {
+    if (style_instruction.length > 200) {
       return res.status(400).json({
-        error: 'qwen_style_instruction must be 200 characters or fewer.'
+        error: 'style_instruction must be 200 characters or fewer.'
       });
     }
   }
@@ -187,24 +166,24 @@ app.post('/generate-video', async (req, res) => {
         user_id, prompt, script, duration, videotype, voice,
         content_flow, media_type, media_mode,
         add_captions, caption_style,
-        qwen_style_instruction,
+        style_instruction,
         status
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING id`,
       [
         actualUserId,
-        prompt  || null,
-        script  || null,
+        prompt             || null,
+        script             || null,
         duration,
         videotype,
         voice,
         actualContentFlow,
         actualMediaType,
         actualMediaMode,
-        add_captions || false,
-        caption_style || null,
-        qwen_style_instruction || null,   // ← NEW
+        add_captions       || false,
+        caption_style      || null,
+        style_instruction  || null,
         initialStatus,
       ]
     );
@@ -217,14 +196,14 @@ app.post('/generate-video', async (req, res) => {
 
     // Respond immediately, then wake worker
     res.json({
-      success: true,
-      message: 'Celebrity video generation job created.',
+      success:       true,
+      message:       'Video generation job created.',
       jobId,
-      status: initialStatus,
-      content_flow: actualContentFlow,
-      media_type: actualMediaType,
-      media_mode: actualMediaMode,
-      add_captions: add_captions || false,
+      status:        initialStatus,
+      content_flow:  actualContentFlow,
+      media_type:    actualMediaType,
+      media_mode:    actualMediaMode,
+      add_captions:  add_captions  || false,
       caption_style: caption_style || null,
     });
 
@@ -236,7 +215,7 @@ app.post('/generate-video', async (req, res) => {
     console.error('> [backend] Error creating job:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to create job.'
+      error:   'Failed to create job.'
     });
   }
 });
